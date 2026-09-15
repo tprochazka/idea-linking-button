@@ -23,7 +23,7 @@ plugins {
 }
 
 group = "cz.atomsoft.ideaplugin"
-version = providers.gradleProperty("pluginVersion").orElse("0.9.1").get()
+version = providers.gradleProperty("pluginVersion").orElse("0.9.3").get()
 
 repositories {
     mavenCentral()
@@ -49,6 +49,8 @@ intellijPlatform {
         }
 
         changeNotes = """
+            Also send to the active AI Assistant (ACP) chat input, and added the clip icon to
+            the floating toolbar shown over a text selection.<br>
             Fixed terminal targeting and reference context resolution; removed the experimental Cursor integration.
         """.trimIndent()
     }
