@@ -19,14 +19,16 @@ along with Code Reference Inserter. If not, see <https://www.gnu.org/licenses/>.
 # Code Reference Inserter
 
 Code Reference Inserter is a JetBrains IDE plugin for quickly inserting a useful
-code reference into the selected standard Terminal tab. It is intended for
-workflows where an IDE action should paste the current file, folder, or selected
-code range directly into a running shell or command-line tool.
+code reference into the selected standard Terminal tab or supported AI chat
+input. It is intended for workflows where an IDE action should paste the
+current file, folder, or selected code range directly into a running shell or
+assistant prompt.
 
 The development build targets IntelliJ IDEA 2025.2.4 and requires the bundled
-JetBrains Terminal plugin. Other JetBrains IDEs, including Android Studio, need
-separate runtime verification. If the terminal cannot be written to, the same
-text is copied to the IDE clipboard.
+JetBrains Terminal plugin. Chat insertion supports IntelliJ AI Assistant,
+GitHub Copilot Chat, and Android Studio Gemini when their corresponding UI is
+available. If no supported destination can be written to, the same text is
+copied to the IDE clipboard.
 
 ## Features
 
@@ -34,7 +36,9 @@ text is copied to the IDE clipboard.
 - Inserts the active editor file path with selected line range.
 - Inserts selected files or folders from the Project View.
 - Writes into the selected standard Terminal tool window tab when possible.
-- Falls back to the IDE clipboard when no supported terminal target is available.
+- Writes into the active IntelliJ AI Assistant, GitHub Copilot Chat, or Android
+  Studio Gemini composer when possible.
+- Falls back to the IDE clipboard when no supported destination is available.
 - Registers the **Insert Code Reference** action in the main toolbar, navigation
   bar toolbar, Tools menu, editor context menu, editor tab context menu, and
   Project View context menu.
