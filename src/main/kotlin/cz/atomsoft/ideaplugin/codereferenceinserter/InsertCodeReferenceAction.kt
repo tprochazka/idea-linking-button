@@ -25,6 +25,7 @@ import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.actionSystem.PlatformDataKeys
 import com.intellij.openapi.components.service
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.DumbAware
@@ -59,7 +60,10 @@ class InsertCodeReferenceAction : AnAction(
 
         val text = LinkPayloadResolver.formatInsertText(payload)
         val dispatcher = project.service<CodeReferenceInsertionDispatcher>()
-        if (dispatcher.insert(text)) {
+        val recentToolWindowIds = e.getData(PlatformDataKeys.LAST_ACTIVE_TOOL_WINDOWS)
+            ?.map { it.id }
+            .orEmpty()
+        if (dispatcher.insert(text, recentToolWindowIds)) {
             return
         }
 

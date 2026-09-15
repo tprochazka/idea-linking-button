@@ -23,34 +23,25 @@ import com.intellij.openapi.wm.ToolWindowManager
 
 /**
  * Orders tool windows by how likely they are to be the user's intended send target:
- * active, then last-active, then other visible windows, with [deprioritizedIds] considered last.
+ * active, then the action's recent-focus stack, then other visible windows, with
+ * [deprioritizedIds] considered last.
  */
 internal object ToolWindowCandidateOrder {
 
-    fun current(toolWindowManager: ToolWindowManager, deprioritizedIds: Set<String>): List<ToolWindow> {
-        val ids = LinkedHashSet<String>()
-        toolWindowManager.activeToolWindowId?.let { ids.add(it) }
-        toolWindowManager.lastActiveToolWindowId?.let { ids.add(it) }
-
-        toolWindowManager.toolWindowIds
-            .filterNot { it in deprioritizedIds }
-            .forEach { id ->
-                val toolWindow = toolWindowManager.getToolWindow(id)
-                if (toolWindow?.isVisible == true) {
-                    ids.add(id)
-                }
-            }
-
-        toolWindowManager.toolWindowIds
-            .filter { it in deprioritizedIds }
-            .forEach { id ->
-                val toolWindow = toolWindowManager.getToolWindow(id)
-                if (toolWindow?.isVisible == true) {
-                    ids.add(id)
-                }
-            }
-
-        return ids.mapNotNull { toolWindowManager.getToolWindow(it) }
+    fun current(
+        toolWindowManager: ToolWindowManager,
+        deprioritizedIds: Set<String>,
+        recentlyActiveToolWindowIds: List<String>,
+    ): List<ToolWindow> {
+        val toolWindows = toolWindowManager.toolWindowIds.associateWith(toolWindowManager::getToolWindow)
+        return orderedIds(
+            activeToolWindowId = toolWindowManager.activeToolWindowId,
+            lastActiveToolWindowId = toolWindowManager.lastActiveToolWindowId,
+            recentlyActiveToolWindowIds = recentlyActiveToolWindowIds,
+            toolWindowIds = toolWindowManager.toolWindowIds.asList(),
+            isVisible = { id -> toolWindows[id]?.isVisible == true },
+            deprioritizedIds = deprioritizedIds,
+        ).mapNotNull(toolWindows::get)
     }
 
     fun describe(toolWindows: List<ToolWindow>): String =
@@ -58,4 +49,26 @@ internal object ToolWindowCandidateOrder {
             val contentName = toolWindow.contentManager.selectedContent?.displayName?.ifBlank { "unnamed" } ?: "none"
             "${toolWindow.id}:$contentName"
         }
+}
+
+/**
+ * Returns target IDs in focus order. [recentlyActiveToolWindowIds] comes from the public
+ * PlatformDataKeys.LAST_ACTIVE_TOOL_WINDOWS action-data key and preserves meaningful focus when
+ * the action's Project View context becomes active.
+ */
+internal fun orderedIds(
+    activeToolWindowId: String?,
+    lastActiveToolWindowId: String?,
+    recentlyActiveToolWindowIds: List<String>,
+    toolWindowIds: List<String>,
+    isVisible: (String) -> Boolean,
+    deprioritizedIds: Set<String>,
+): List<String> {
+    val ids = LinkedHashSet<String>()
+    activeToolWindowId?.takeIf(isVisible)?.let(ids::add)
+    recentlyActiveToolWindowIds.filter(isVisible).forEach(ids::add)
+    lastActiveToolWindowId?.takeIf(isVisible)?.let(ids::add)
+    toolWindowIds.filter { it !in deprioritizedIds && isVisible(it) }.forEach(ids::add)
+    toolWindowIds.filter { it in deprioritizedIds && isVisible(it) }.forEach(ids::add)
+    return ids.toList()
 }

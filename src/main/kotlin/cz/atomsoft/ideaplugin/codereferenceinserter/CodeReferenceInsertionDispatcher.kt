@@ -31,11 +31,9 @@ import java.util.concurrent.CancellationException
  * Single entry point for sending the formatted code reference text to whichever active surface
  * (chat tool window or terminal) is the most likely intended target.
  *
- * [TerminalTextInserter] resolves and writes to the terminal as a single, self-contained step
- * (no longer exposing a per-tool-window probe), so precedence between it and the chat surfaces
- * is decided coarsely: when the Terminal tool window is the IDE's active tool window, it is
- * tried first and exclusively; otherwise chat candidates are scanned in priority order first,
- * with the terminal's own resolution (including its sole-widget fallback) tried last.
+ * Candidate order comes from the action's current focus plus its recent tool-window focus stack.
+ * A Terminal candidate is dispatched when reached and exclusively: a failed terminal write falls
+ * back to the clipboard rather than trying a chat that happened to be visible.
  */
 @Service(Service.Level.PROJECT)
 class CodeReferenceInsertionDispatcher(private val project: Project) {
@@ -44,45 +42,35 @@ class CodeReferenceInsertionDispatcher(private val project: Project) {
     var lastLookupSummary: String = "Insertion has not run yet."
         private set
 
-    fun insert(text: String): Boolean {
+    fun insert(text: String, recentlyActiveToolWindowIds: List<String>): Boolean {
         return try {
             val chat = project.service<ChatToolWindowTextInserter>()
             val terminal = project.service<TerminalTextInserter>()
 
             val toolWindowManager = ToolWindowManager.getInstance(project)
-            val terminalIsActive = toolWindowManager.activeToolWindowId == TerminalToolWindowFactory.TOOL_WINDOW_ID
-
-            if (terminalIsActive) {
-                // Terminal is documented as the exclusive target here: a failed write must not
-                // fall through to an unrelated visible chat window, so return its result as-is.
-                val written = terminal.insertIntoSelectedTerminal(text)
-                lastLookupSummary = terminal.lastLookupSummary
-                return written
-            }
-
             val candidates = ToolWindowCandidateOrder.current(
                 toolWindowManager,
                 setOf(TerminalToolWindowFactory.TOOL_WINDOW_ID),
+                recentlyActiveToolWindowIds,
             )
 
-            for (toolWindow in candidates) {
-                val content = toolWindow.contentManager.selectedContent ?: continue
-                val target = chat.findTargetInContent(toolWindow, content) ?: continue
-
-                if (target.write(text)) {
+            return dispatchCandidates(
+                candidates = candidates,
+                isTerminal = { it.id == TerminalToolWindowFactory.TOOL_WINDOW_ID },
+                insertIntoTerminal = {
+                    terminal.insertIntoSelectedTerminal(text).also {
+                        lastLookupSummary = terminal.lastLookupSummary
+                    }
+                },
+                insertIntoChat = { toolWindow ->
+                    val content = toolWindow.contentManager.selectedContent ?: return@dispatchCandidates false
+                    val target = chat.findTargetInContent(toolWindow, content) ?: return@dispatchCandidates false
+                    if (!target.write(text)) return@dispatchCandidates false
                     activate(target)
                     lastLookupSummary = "Inserted into ${target.description}."
-                    return true
-                }
-            }
-
-            if (terminal.insertIntoSelectedTerminal(text)) {
-                lastLookupSummary = terminal.lastLookupSummary
-                return true
-            }
-
-            lastLookupSummary = "No chat or terminal target found. chat=${chat.lastLookupSummary} terminal=${terminal.lastLookupSummary}"
-            false
+                    true
+                },
+            )
         } catch (e: ProcessCanceledException) {
             throw e
         } catch (e: CancellationException) {
@@ -105,4 +93,21 @@ class CodeReferenceInsertionDispatcher(private val project: Project) {
             logger.warn("Failed to request focus for insertion target", e)
         }
     }
+}
+
+/**
+ * Attempts destinations in focus order. A Terminal candidate is terminal-only: a failed terminal
+ * write must fall back to the clipboard, never to a later chat candidate.
+ */
+internal fun <T> dispatchCandidates(
+    candidates: List<T>,
+    isTerminal: (T) -> Boolean,
+    insertIntoTerminal: () -> Boolean,
+    insertIntoChat: (T) -> Boolean,
+): Boolean {
+    for (candidate in candidates) {
+        if (isTerminal(candidate)) return insertIntoTerminal()
+        if (insertIntoChat(candidate)) return true
+    }
+    return insertIntoTerminal()
 }
