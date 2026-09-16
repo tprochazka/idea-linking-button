@@ -30,20 +30,24 @@ import com.intellij.openapi.wm.ToolWindow
 import com.intellij.ui.content.Content
 import java.awt.Component
 import java.awt.Container
+import java.awt.KeyboardFocusManager
 import java.util.concurrent.CancellationException
-import javax.swing.text.JTextComponent
 import javax.swing.SwingUtilities
+import javax.swing.text.JTextComponent
 
 /**
  * Finds and writes into chat inputs of IntelliJ's built-in AI Assistant/ACP, GitHub Copilot,
- * or Android Studio Gemini tool windows. None of these chat implementations is a compile-time
- * dependency, so detection uses the already-loaded Swing component tree or a narrow reflective
- * bridge, in the same compatibility-first spirit as [TerminalTextInserter].
+ * or Android Studio Gemini tool windows, with a conservative generic Swing text-input fallback
+ * for other tool windows.
+ * None of these chat implementations is a compile-time dependency, so detection uses the
+ * already-loaded Swing component tree or a narrow reflective bridge, in the same
+ * compatibility-first spirit as [TerminalTextInserter].
  */
 @Service(Service.Level.PROJECT)
 class ChatToolWindowTextInserter(private val project: Project) {
 
     private val logger = logger<ChatToolWindowTextInserter>()
+    private val debugLogging = isDebugLoggingEnabled()
     var lastLookupSummary: String = "Chat lookup has not run yet."
         private set
 
@@ -53,12 +57,8 @@ class ChatToolWindowTextInserter(private val project: Project) {
             runCatching { toolWindow.stripeTitle }.getOrDefault(""),
             containsClassPrefix(content.component, AI_ASSISTANT_CLASS_PREFIX),
         )
-        if (surface == null) {
-            lastLookupSummary = "toolWindow=${toolWindow.id} is not a recognized chat window."
-            return null
-        }
-
-        val target = when (surface) {
+        debug { "lookup toolWindow=${toolWindow.id} content=${content.displayName} surface=$surface" }
+        val specializedTarget = when (surface) {
             ChatSurface.AI_ASSISTANT -> findWritableEditorDescendant(content.component)?.let { editor ->
                 TextInsertTarget(
                     description = "AI Assistant chat input (${toolWindow.id})",
@@ -83,13 +83,33 @@ class ChatToolWindowTextInserter(private val project: Project) {
                     write = { text -> GeminiToolWindowBridge.insert(gemini, text) },
                 )
             }
+            null -> null
+        }
+        val target = specializedTarget ?: if (shouldUseGenericTextFallback(surface)) {
+            findWritableGenericTextInput(content.component)?.let { input ->
+                TextInsertTarget(
+                    description = "Generic Swing text input (${toolWindow.id})",
+                    toolWindow = toolWindow,
+                    focus = { input.requestFocusInWindow() },
+                    write = { text -> insertIntoTextComponent(input, text) },
+                )
+            }
+        } else {
+            null
         }
         if (target == null) {
-            lastLookupSummary = "toolWindow=${toolWindow.id} matched $surface but no writable input was found."
+            lastLookupSummary = if (surface == null) {
+                "toolWindow=${toolWindow.id} has no recognized chat or unique writable text input."
+            } else {
+                "toolWindow=${toolWindow.id} matched $surface but no writable input was found."
+            }
             return null
         }
 
-        lastLookupSummary = "toolWindow=${toolWindow.id} matched $surface chat input."
+        lastLookupSummary = when {
+            specializedTarget != null -> "toolWindow=${toolWindow.id} matched $surface chat input."
+            else -> "toolWindow=${toolWindow.id} matched a unique generic Swing text input."
+        }
         return target
     }
 
@@ -124,6 +144,35 @@ class ChatToolWindowTextInserter(private val project: Project) {
     private fun findWritableCopilotInput(root: Component): JTextComponent? {
         return findTextComponentDescendant(root) { component ->
             component.javaClass.name.startsWith(COPILOT_INPUT_CLASS_PREFIX)
+        }
+    }
+
+    private fun findWritableGenericTextInput(root: Component): JTextComponent? {
+        return findGenericTextInput(
+            root,
+            KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner,
+        )
+    }
+
+    internal fun findGenericTextInput(root: Component, focusOwner: Component?): JTextComponent? {
+        val candidates = mutableListOf<JTextComponent>()
+        collectWritableTextComponents(root, candidates)
+        val selected = selectGenericTextInput(candidates, focusOwner)
+        debug {
+            "generic Swing candidates=${candidates.size}, " +
+                "focusOwner=${focusOwner?.javaClass?.name ?: "none"}, " +
+                "selected=${selected?.javaClass?.name ?: "none"}"
+        }
+        return selected
+    }
+
+    private fun collectWritableTextComponents(root: Component, result: MutableList<JTextComponent>) {
+        if (!root.isVisible) return
+        if (root is JTextComponent && isWritableTextComponent(root)) {
+            result += root
+        }
+        if (root is Container) {
+            root.components.forEach { child -> collectWritableTextComponents(child, result) }
         }
     }
 
@@ -164,7 +213,7 @@ class ChatToolWindowTextInserter(private val project: Project) {
     private fun insertIntoTextComponent(component: JTextComponent, text: String): Boolean {
         return try {
             if (!SwingUtilities.isEventDispatchThread()) {
-                logger.warn("Copilot chat input insertion was requested off the EDT")
+                logger.warn("Swing text input insertion was requested off the EDT")
                 return false
             }
             component.replaceSelection(text)
@@ -174,9 +223,24 @@ class ChatToolWindowTextInserter(private val project: Project) {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
-            logger.warn("Failed to insert text into Copilot chat input", e)
+            logger.warn("Failed to insert text into Swing text input", e)
             false
         }
+    }
+
+    private inline fun debug(message: () -> String) {
+        if (debugLogging) logger.info(message())
+    }
+}
+
+/** Returns a single generic text input, or the uniquely focused one when several are present. */
+internal fun selectGenericTextInput(
+    candidates: List<JTextComponent>,
+    focusOwner: Component?,
+): JTextComponent? {
+    if (candidates.size == 1) return candidates.single()
+    return candidates.singleOrNull { candidate ->
+        candidate === focusOwner || focusOwner?.let { SwingUtilities.isDescendingFrom(it, candidate) } == true
     }
 }
 
@@ -209,3 +273,5 @@ internal fun classifyChatSurface(
     }
     return null
 }
+
+internal fun shouldUseGenericTextFallback(surface: ChatSurface?): Boolean = surface == null

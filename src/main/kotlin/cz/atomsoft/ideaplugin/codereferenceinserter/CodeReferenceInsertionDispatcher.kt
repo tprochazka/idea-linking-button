@@ -39,6 +39,7 @@ import java.util.concurrent.CancellationException
 class CodeReferenceInsertionDispatcher(private val project: Project) {
 
     private val logger = logger<CodeReferenceInsertionDispatcher>()
+    private val debugLogging = isDebugLoggingEnabled()
     var lastLookupSummary: String = "Insertion has not run yet."
         private set
 
@@ -53,6 +54,10 @@ class CodeReferenceInsertionDispatcher(private val project: Project) {
                 setOf(TerminalToolWindowFactory.TOOL_WINDOW_ID),
                 recentlyActiveToolWindowIds,
             )
+            debug {
+                "candidate order=${runCatching { ToolWindowCandidateOrder.describe(candidates) }.getOrDefault("<unavailable>")}, " +
+                    "recent=${recentlyActiveToolWindowIds.joinToString(prefix = "[", postfix = "]")}"
+            }
 
             return dispatchCandidates(
                 candidates = candidates,
@@ -60,14 +65,28 @@ class CodeReferenceInsertionDispatcher(private val project: Project) {
                 insertIntoTerminal = {
                     terminal.insertIntoSelectedTerminal(text).also {
                         lastLookupSummary = terminal.lastLookupSummary
+                        debug { "terminal result=$it summary=$lastLookupSummary" }
                     }
                 },
                 insertIntoChat = { toolWindow ->
-                    val content = toolWindow.contentManager.selectedContent ?: return@dispatchCandidates false
-                    val target = chat.findTargetInContent(toolWindow, content) ?: return@dispatchCandidates false
-                    if (!target.write(text)) return@dispatchCandidates false
+                    val content = toolWindow.contentManager.selectedContent
+                    if (content == null) {
+                        debug { "chat candidate=${toolWindow.id} has no selected content" }
+                        return@dispatchCandidates false
+                    }
+                    val target = chat.findTargetInContent(toolWindow, content)
+                    if (target == null) {
+                        debug { "chat candidate=${toolWindow.id} had no writable target" }
+                        return@dispatchCandidates false
+                    }
+                    debug { "chat candidate=${toolWindow.id} target=${target.description}" }
+                    if (!target.write(text)) {
+                        debug { "chat candidate=${toolWindow.id} write failed target=${target.description}" }
+                        return@dispatchCandidates false
+                    }
                     activate(target)
                     lastLookupSummary = "Inserted into ${target.description}."
+                    debug { "inserted target=${target.description}" }
                     true
                 },
             )
@@ -92,6 +111,10 @@ class CodeReferenceInsertionDispatcher(private val project: Project) {
         } catch (e: Throwable) {
             logger.warn("Failed to request focus for insertion target", e)
         }
+    }
+
+    private inline fun debug(message: () -> String) {
+        if (debugLogging) logger.info(message())
     }
 }
 

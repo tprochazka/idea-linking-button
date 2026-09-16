@@ -24,7 +24,8 @@ along with Code Reference Inserter. If not, see <https://www.gnu.org/licenses/>.
 
     <description><![CDATA[
         Inserts the current editor file, selected line range, or Project View selection into the selected standard Terminal tab,
-        AI Assistant chat, GitHub Copilot Chat, or Android Studio Gemini. Falls back to copying the same reference to the IDE clipboard.
+        AI Assistant chat, GitHub Copilot Chat, Android Studio Gemini, or a uniquely identifiable writable Swing text input.
+        Falls back to copying the same reference to the IDE clipboard when no destination can be identified.
 
         Use the Insert Code Reference action from the main toolbar, navigation bar toolbar, Tools menu,
         editor context menu, editor tab context menu, Project View context menu, or the floating toolbar

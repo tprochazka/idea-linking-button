@@ -8,6 +8,7 @@ package cz.atomsoft.ideaplugin.codereferenceinserter
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import javax.swing.JPanel
+import javax.swing.JTextField
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -61,8 +62,55 @@ class ChatSurfaceTest : BasePlatformTestCase() {
         assertTrue(fallback.focusRequested)
     }
 
+    fun testGenericFallbackAcceptsOneWritableTextInput() {
+        val input = JTextField()
+
+        assertTrue(selectGenericTextInput(listOf(input), focusOwner = null) === input)
+    }
+
+    fun testGenericFallbackFindsWritableDescendant() {
+        val container = JPanel()
+        val input = JTextField()
+        container.add(input)
+
+        val inserter = ChatToolWindowTextInserter(project)
+
+        assertTrue(inserter.findGenericTextInput(container, focusOwner = null) === input)
+    }
+
+    fun testGenericFallbackIgnoresReadOnlyDescendant() {
+        val container = JPanel()
+        val readOnly = JTextField().apply { isEditable = false }
+        container.add(readOnly)
+
+        val inserter = ChatToolWindowTextInserter(project)
+
+        assertNull(inserter.findGenericTextInput(container, focusOwner = null))
+    }
+
+    fun testGenericFallbackUsesFocusedInputWhenSeveralExist() {
+        val first = JTextField()
+        val second = JTextField()
+
+        assertTrue(selectGenericTextInput(listOf(first, second), focusOwner = second) === second)
+    }
+
+    fun testGenericFallbackRejectsAmbiguousInputsWithoutFocus() {
+        val first = JTextField()
+        val second = JTextField()
+
+        assertNull(selectGenericTextInput(listOf(first, second), focusOwner = null))
+    }
+
     fun testDoesNotClassifyUnrelatedToolWindowAsChat() {
         assertNull(classifyChatSurface("Project", "Project", hasAiAssistantClass = false))
+    }
+
+    fun testGenericFallbackIsReservedForUnrecognizedToolWindows() {
+        assertTrue(shouldUseGenericTextFallback(null))
+        assertTrue(!shouldUseGenericTextFallback(ChatSurface.AI_ASSISTANT))
+        assertTrue(!shouldUseGenericTextFallback(ChatSurface.COPILOT))
+        assertTrue(!shouldUseGenericTextFallback(ChatSurface.GEMINI))
     }
 
     private class FakeQueryBoxController {

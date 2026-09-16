@@ -49,7 +49,7 @@ intellijPlatform {
         }
 
         changeNotes = """
-            Also send to the active AI Assistant (ACP), GitHub Copilot Chat, or Android Studio Gemini input, and added the clip icon to
+            Also send to the active AI Assistant (ACP), GitHub Copilot Chat, Android Studio Gemini, or unique Swing text input, and added the clip icon to
             the floating toolbar shown over a text selection.<br>
             Fixed terminal targeting and reference context resolution; removed the experimental Cursor integration.
         """.trimIndent()
@@ -63,6 +63,10 @@ intellijPlatform {
 }
 
 tasks {
+    runIde {
+        systemProperty("code.reference.inserter.debug", "true")
+    }
+
     withType<JavaCompile> {
         sourceCompatibility = "21"
         targetCompatibility = "21"

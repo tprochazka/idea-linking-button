@@ -33,14 +33,14 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.IconLoader
 import java.awt.datatransfer.StringSelection
 
-/** Inserts the resolved file or selection reference into the selected terminal or chat input. */
+/** Inserts the resolved file or selection reference into the selected terminal, chat, or text input. */
 class InsertCodeReferenceAction : AnAction(
     "Insert Code Reference",
-    "Insert the current file or selection reference into the active terminal or chat",
+    "Insert the current file or selection reference into the active terminal, chat, or text input",
     IconLoader.getIcon("/icons/linking.svg", InsertCodeReferenceAction::class.java),
 ), DumbAware {
 
-    /** Resolves the action context, then inserts into the terminal/chat or copies to the clipboard. */
+    /** Resolves the action context, then inserts into a supported destination or copies to the clipboard. */
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
         val explicitFileSelection = e.place == ActionPlaces.PROJECT_VIEW_POPUP ||

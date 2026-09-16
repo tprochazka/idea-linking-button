@@ -27,8 +27,9 @@ assistant prompt.
 The development build targets IntelliJ IDEA 2025.2.4 and requires the bundled
 JetBrains Terminal plugin. Chat insertion supports IntelliJ AI Assistant,
 GitHub Copilot Chat, and Android Studio Gemini when their corresponding UI is
-available. If no supported destination can be written to, the same text is
-copied to the IDE clipboard.
+available. Other tool windows can use a conservative fallback when they expose
+one uniquely identifiable writable Swing text input. If no supported destination
+can be written to, the same text is copied to the IDE clipboard.
 
 ## Features
 
@@ -38,6 +39,8 @@ copied to the IDE clipboard.
 - Writes into the selected standard Terminal tool window tab when possible.
 - Writes into the active IntelliJ AI Assistant, GitHub Copilot Chat, or Android
   Studio Gemini composer when possible.
+- Uses a unique writable Swing text input in other tool windows as a safe
+  best-effort fallback; ambiguous inputs are not guessed.
 - Falls back to the IDE clipboard when no supported destination is available.
 - Registers the **Insert Code Reference** action in the main toolbar, navigation
   bar toolbar, Tools menu, editor context menu, editor tab context menu, and
