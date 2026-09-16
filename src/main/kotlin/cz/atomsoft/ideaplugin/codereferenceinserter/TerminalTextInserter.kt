@@ -33,6 +33,8 @@ import com.intellij.ui.content.Content
 import com.jediterm.terminal.TtyConnector
 import org.jetbrains.plugins.terminal.TerminalToolWindowFactory
 import org.jetbrains.plugins.terminal.TerminalToolWindowManager
+import java.awt.Component
+import java.lang.reflect.InvocationTargetException
 import java.util.concurrent.CancellationException
 
 /** Describes which terminal selection source is safe to use for an insertion. */
@@ -113,6 +115,29 @@ internal fun writeTerminalConnector(connector: TtyConnector?, text: String): Boo
     return true
 }
 
+/** Returns whether [target] exposes a public one-String method with [methodName]. */
+internal fun hasPublicStringMethod(target: Any, methodName: String): Boolean =
+    target.javaClass.methods.any { method ->
+        method.name == methodName &&
+            method.parameterCount == 1 &&
+            method.parameterTypes[0] == String::class.java
+    }
+
+/** Invokes one public one-String method, returning `false` when it is unavailable. */
+internal fun invokeReflectiveStringMethod(target: Any, methodName: String, text: String): Boolean {
+    val method = target.javaClass.methods.firstOrNull { candidate ->
+        candidate.name == methodName &&
+            candidate.parameterCount == 1 &&
+            candidate.parameterTypes[0] == String::class.java
+    } ?: return false
+    try {
+        method.invoke(target, text)
+    } catch (e: InvocationTargetException) {
+        throw (e.targetException ?: e)
+    }
+    return true
+}
+
 /**
  * Inserts caller-provided text into the selected JetBrains Terminal widget without executing it.
  * Clipboard fallback and user notification remain the responsibility of the caller.
@@ -121,6 +146,7 @@ internal fun writeTerminalConnector(connector: TtyConnector?, text: String): Boo
 class TerminalTextInserter(private val project: Project) {
 
     private val logger = logger<TerminalTextInserter>()
+    private val debugLogging = isDebugLoggingEnabled()
     var lastLookupSummary: String = "Terminal lookup has not run yet."
         private set
 
@@ -178,7 +204,9 @@ class TerminalTextInserter(private val project: Project) {
             val selectedContent = toolWindow.contentManager.selectedContent
             if (selectedContent != null) {
                 val target = findTargetForSelectedContent(terminalManager, toolWindow, selectedContent)
-                lastLookupSummary = "toolWindow=true, selectedContent=${contentName(selectedContent)}"
+                lastLookupSummary =
+                    "toolWindow=true, selectedContent=${contentName(selectedContent)}, " +
+                        "target=${target?.description ?: "none"}"
                 return target
             }
         }
@@ -216,6 +244,16 @@ class TerminalTextInserter(private val project: Project) {
         toolWindow: ToolWindow,
         selectedContent: Content,
     ): TerminalTarget? {
+        // Reworked Terminal (used by recent Android Studio builds) is not represented by
+        // TerminalToolWindowManager. Its public frontend tabs manager owns the selected view.
+        // Keep this bridge reflective because the plugin is compiled against older IDE APIs.
+        val reworkedView = findReworkedTerminalViewBySelectedContent(selectedContent)
+        debug {
+            "selected terminal content=${contentName(selectedContent)}, " +
+                "reworkedView=${reworkedView?.javaClass?.name ?: "none"}"
+        }
+        reworkedViewTarget(reworkedView, toolWindow)?.let { return it }
+
         val modernMatches = terminalManager.terminalWidgets
             .filter { widget -> terminalManager.getContainer(widget)?.content == selectedContent }
             .toList()
@@ -260,6 +298,63 @@ class TerminalTextInserter(private val project: Project) {
         terminalManager.toolWindow
             ?: ToolWindowManager.getInstance(project).getToolWindow(TerminalToolWindowFactory.TOOL_WINDOW_ID)
 
+    /** Finds the selected frontend terminal view without depending on its optional classes. */
+    private fun findReworkedTerminalViewBySelectedContent(selectedContent: Content): Any? {
+        return try {
+            val managerClass = Class.forName(REWORKED_TABS_MANAGER_CLASS)
+            val getInstance = managerClass.methods.firstOrNull { method ->
+                method.name == "getInstance" &&
+                    java.lang.reflect.Modifier.isStatic(method.modifiers) &&
+                    method.parameterCount == 1 &&
+                    method.parameterTypes[0].isAssignableFrom(Project::class.java)
+            } ?: return null
+            val manager = try {
+                getInstance.invoke(null, project)
+            } catch (e: InvocationTargetException) {
+                throw (e.targetException ?: e)
+            } ?: return null
+            val tabs = invokeNoArg(manager, "getTabs") as? Iterable<*> ?: return null
+            for (tab in tabs) {
+                if (invokeNoArg(tab, "getContent") === selectedContent) {
+                    return invokeNoArg(tab, "getView")
+                }
+            }
+            null
+        } catch (e: ProcessCanceledException) {
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            debug { "Reworked terminal lookup unavailable: ${e.javaClass.simpleName}: ${e.message}" }
+            null
+        }
+    }
+
+    /** Creates a target for the frontend TerminalView's public sendText API. */
+    private fun reworkedViewTarget(view: Any?, toolWindow: ToolWindow?): TerminalTarget? {
+        view ?: return null
+        if (!hasPublicStringMethod(view, "sendText")) return null
+        val focusComponent = try {
+            invokeNoArg(view, "getPreferredFocusableComponent") as? Component
+        } catch (e: ProcessCanceledException) {
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            null
+        }
+        return TerminalTarget(
+            description = view.javaClass.name,
+            toolWindow = toolWindow,
+            focus = { focusComponent?.requestFocus() },
+            write = { text ->
+                if (!invokeReflectiveStringMethod(view, "sendText", text)) {
+                    throw IllegalStateException("Reworked terminal view has no sendText method")
+                }
+            },
+        )
+    }
+
     /** Writes through exactly one reworked-input or classic-connector path. */
     private fun writeText(widget: TerminalWidget, text: String) {
         findReworkedTerminalInput(widget)?.let { input ->
@@ -281,6 +376,18 @@ class TerminalTextInserter(private val project: Project) {
         return dataContext.getData(TERMINAL_INPUT_DATA_KEY) as? TerminalInput
     }
 
+    private fun invokeNoArg(target: Any?, methodName: String): Any? {
+        target ?: return null
+        val method = target.javaClass.methods.firstOrNull { method ->
+            method.name == methodName && method.parameterCount == 0
+        } ?: return null
+        return try {
+            method.invoke(target)
+        } catch (e: InvocationTargetException) {
+            throw (e.targetException ?: e)
+        }
+    }
+
     /** Activates the terminal and focuses its widget when a tool window is available. */
     private fun activateTerminal(target: TerminalTarget) {
         target.toolWindow?.activate({ target.focus() }, true) ?: target.focus()
@@ -288,6 +395,10 @@ class TerminalTextInserter(private val project: Project) {
 
     private fun contentName(content: Content): String =
         content.displayName.ifBlank { "unnamed" }
+
+    private inline fun debug(message: () -> String) {
+        if (debugLogging) logger.info(message())
+    }
 
     /** A resolved widget plus the single write and focus operations allowed for it. */
     private data class TerminalTarget(
@@ -298,6 +409,9 @@ class TerminalTextInserter(private val project: Project) {
     )
 
     private companion object {
+        private const val REWORKED_TABS_MANAGER_CLASS =
+            "com.intellij.terminal.frontend.toolwindow.TerminalToolWindowTabsManager"
+
         // TerminalInput is installed by the reworked terminal on its focused output editor.
         // DataContext is the terminal's supported lookup boundary; no private fields or
         // arbitrary user-data maps are traversed.

@@ -86,4 +86,46 @@ class TerminalTextInserterTest : BasePlatformTestCase() {
     fun testUnavailableClassicConnectorIsNotReportedAsWritten() {
         assertFalse(writeTerminalConnector(null, "text"))
     }
+
+    fun testReflectiveTerminalViewSenderWritesText() {
+        val sender = FakeTerminalView()
+
+        assertTrue(hasPublicStringMethod(sender, "sendText"))
+        assertTrue(invokeReflectiveStringMethod(sender, "sendText", "src/Foo.kt "))
+        assertEquals("src/Foo.kt ", sender.receivedText)
+    }
+
+    fun testReflectiveTerminalViewSenderRejectsUnsupportedMethod() {
+        val sender = FakeTerminalView()
+
+        assertFalse(hasPublicStringMethod(sender, "sendString"))
+        assertFalse(invokeReflectiveStringMethod(sender, "sendString", "text"))
+        assertNull(sender.receivedText)
+    }
+
+    fun testReflectiveTerminalViewSenderPropagatesCancellation() {
+        val processCancellation = FakeTerminalView().apply {
+            failure = ProcessCanceledException()
+        }
+        assertFailsWith<ProcessCanceledException> {
+            invokeReflectiveStringMethod(processCancellation, "sendText", "text")
+        }
+
+        val coroutineCancellation = FakeTerminalView().apply {
+            failure = CancellationException("cancelled")
+        }
+        assertFailsWith<CancellationException> {
+            invokeReflectiveStringMethod(coroutineCancellation, "sendText", "text")
+        }
+    }
+
+    private class FakeTerminalView {
+        var receivedText: String? = null
+        var failure: Throwable? = null
+
+        fun sendText(text: String) {
+            failure?.let { throw it }
+            receivedText = text
+        }
+    }
 }
